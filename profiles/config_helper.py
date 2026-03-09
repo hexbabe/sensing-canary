@@ -307,24 +307,59 @@ async def cmd_get_logs(machine_cfg, args):
 
 
 async def cmd_get_version(machine_cfg, args):
-    """Get viam-server version + module versions from config."""
+    """Get viam-server version + resolved module versions.
+
+    For modules pinned to 'latest' or 'latest-with-prerelease', resolves
+    the actual semver from the Viam registry by finding the most recent
+    version with a matching platform binary.
+    """
+    import platform as _platform
+
     robot = await get_robot_client(machine_cfg)
     version_resp = await robot.get_version()
     await robot.close()
 
-    # Also grab module versions from config
     client = await get_app_client(machine_cfg)
     part = await client.app_client.get_robot_part(machine_cfg["part_id"])
-    client.close()
+
+    # Determine current platform for registry lookup
+    arch = _platform.machine()
+    arch_map = {"x86_64": "amd64", "aarch64": "arm64", "armv7l": "arm"}
+    go_arch = arch_map.get(arch, arch)
+    plat = f"linux/{go_arch}"
 
     cfg = part.robot_config or {}
     modules = []
     for m in cfg.get("modules", []):
+        module_id = m.get("module_id")
+        config_version = m.get("version", "")
+        resolved_version = config_version
+
+        # Resolve floating version tags from registry
+        needs_resolve = config_version in (
+            "latest", "latest-with-prerelease",
+        ) or config_version.startswith("latest")
+
+        if needs_resolve and module_id:
+            try:
+                mod = await client.app_client.get_module(module_id)
+                # Walk versions newest-first, find first with our platform
+                for v in reversed(list(mod.versions)):
+                    plats = [f.platform for f in v.files]
+                    if plat in plats:
+                        resolved_version = v.version
+                        break
+            except Exception as e:
+                resolved_version = f"{config_version} (resolve failed: {e})"
+
         modules.append({
             "name": m.get("name"),
-            "module_id": m.get("module_id"),
-            "version": m.get("version"),
+            "module_id": module_id,
+            "version": resolved_version,
+            "config_version": config_version,
         })
+
+    client.close()
 
     print(json.dumps({
         "action": "get-version",
