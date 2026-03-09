@@ -1,0 +1,42 @@
+{
+  "machines": [
+    {
+      "name": "sean-framework",
+      "address": "sean-framework-main.yznpnnv7bl.viam.cloud",
+      "api_key_id": "REPLACE_ME",
+      "api_key": "REPLACE_ME",
+      "part_id": "08852a48-cafb-47fc-a747-14982036c715",
+      "machine_id": "b2fd0eaa-89f5-40b1-aff6-7f3ecaa37205",
+      "test_profiles": [
+        "realsense"
+      ],
+      "persistent_resources": [
+        "telegraf-sensor",
+        "viam_viam-telegraf-sensor"
+      ],
+      "telegraf_sensor": {
+        "name": "telegraf-sensor"
+      }
+    }
+  ],
+  "viam_app": {
+    "email": "REPLACE_ME",
+    "password": "REPLACE_ME"
+  },
+  "schedule": {
+    "cron_expr": "*/30 * * * *",
+    "timezone": "America/New_York"
+  },
+  "alerts": {
+    "slack_webhook": "",
+    "whatsapp": true
+  },
+  "logs": {
+    "enabled": true,
+    "num_entries": 100,
+    "lookback_minutes": 30,
+    "levels": []
+  },
+  "runs_dir": "runs",
+  "max_report_days": 30
+}
