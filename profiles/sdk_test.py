@@ -250,15 +250,101 @@ async def collect_machine(machine_config, logs_config, probe=False) -> dict:
     return dump
 
 
+def write_profile_scoped_output(dump, output_dir, tag):
+    """Split a combined dump into profile-scoped and machine-level files.
+
+    Writes:
+      <output_dir>/<profile>/samples/<tag>.json   — per-profile camera data
+      <output_dir>/machine/<tag>_telegraf.json     — telegraf readings
+      <output_dir>/machine/<tag>_logs.json         — machine logs
+
+    Each profile file uses schema canary.dump.v2 and contains only that
+    profile's cameras. Machine-level files are simple wrappers.
+    """
+    output_dir = Path(output_dir)
+    collected_at = dump["collected_at"]
+    mode = dump["mode"]
+    files_written = []
+
+    for machine_dump in dump["machines"]:
+        # Group cameras by profile
+        cameras_by_profile = {}
+        for cam_data in machine_dump.get("cameras", []):
+            profile = cam_data.get("profile", "base")
+            cameras_by_profile.setdefault(profile, []).append(cam_data)
+
+        # Write per-profile files
+        for profile, cameras in cameras_by_profile.items():
+            profile_dump = {
+                "schema": "canary.dump.v2",
+                "mode": mode,
+                "collected_at": collected_at,
+                "machine": machine_dump["machine"],
+                "address": machine_dump["address"],
+                "part_id": machine_dump.get("part_id"),
+                "connected": machine_dump["connected"],
+                "profile": profile,
+                "cameras": cameras,
+                "connection_error": machine_dump.get("connection_error"),
+            }
+            profile_path = output_dir / profile / "samples" / f"{tag}.json"
+            profile_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(profile_path, "w") as f:
+                json.dump(profile_dump, f, indent=2)
+            files_written.append(str(profile_path))
+
+        # Write telegraf
+        telegraf = machine_dump.get("telegraf")
+        if telegraf is not None:
+            telegraf_wrap = {
+                "schema": "canary.telegraf.v1",
+                "collected_at": collected_at,
+                "machine": machine_dump["machine"],
+                "telegraf": telegraf,
+            }
+            telegraf_path = output_dir / "machine" / f"{tag}_telegraf.json"
+            telegraf_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(telegraf_path, "w") as f:
+                json.dump(telegraf_wrap, f, indent=2)
+            files_written.append(str(telegraf_path))
+
+        # Write logs
+        logs = machine_dump.get("logs")
+        if logs is not None:
+            logs_wrap = {
+                "schema": "canary.logs.v1",
+                "collected_at": collected_at,
+                "machine": machine_dump["machine"],
+                "logs": logs,
+            }
+            logs_path = output_dir / "machine" / f"{tag}_logs.json"
+            logs_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(logs_path, "w") as f:
+                json.dump(logs_wrap, f, indent=2)
+            files_written.append(str(logs_path))
+
+    return files_written
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Canary raw data collector")
     parser.add_argument("--config", required=True, help="Path to canary.json")
     parser.add_argument("--machine", help="Collect from this machine only")
-    parser.add_argument("--output", "-o", help="Write JSON to file (default: stdout)")
+    parser.add_argument("--output", "-o", help="Write combined JSON to file (v1 compat)")
+    parser.add_argument("--output-dir", help="Write profile-scoped files to this directory (v2)")
+    parser.add_argument("--tag", help="Filename tag for --output-dir (e.g. 1430_full)")
     parser.add_argument("--no-logs", action="store_true", help="Skip log collection")
     parser.add_argument("--probe", action="store_true",
                         help="Lightweight mode: single get_images per camera + telegraf + logs only")
     args = parser.parse_args()
+
+    if args.output_dir and not args.tag:
+        print("Error: --tag is required when using --output-dir", file=sys.stderr)
+        sys.exit(1)
+
+    if args.output and args.output_dir:
+        print("Error: --output and --output-dir are mutually exclusive", file=sys.stderr)
+        sys.exit(1)
 
     with open(args.config) as f:
         config = json.load(f)
@@ -285,14 +371,21 @@ async def main():
         machine_dump = await collect_machine(machine, logs_config, probe=args.probe)
         dump["machines"].append(machine_dump)
 
-    output_str = json.dumps(dump, indent=2)
-    if args.output:
+    if args.output_dir:
+        # Profile-scoped output (v2)
+        files = write_profile_scoped_output(dump, args.output_dir, args.tag)
+        print(f"Profile-scoped output: {len(files)} files written to {args.output_dir}")
+        for f in files:
+            print(f"  {f}")
+    elif args.output:
+        # Combined output (v1 compat)
+        output_str = json.dumps(dump, indent=2)
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
         with open(args.output, "w") as f:
             f.write(output_str)
         print(f"Dump written to {args.output} ({len(dump['machines'])} machines)")
     else:
-        print(output_str)
+        print(json.dumps(dump, indent=2))
 
 
 if __name__ == "__main__":
