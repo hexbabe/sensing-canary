@@ -81,6 +81,17 @@ class RealSenseProfile(BaseProfile):
     """Intel RealSense (D435i, D455, etc.) raw data collection."""
 
     name = "realsense"
+    ACCEPTED_MODELS = {"viam:camera:realsense"}
+
+    def _check_model(self, robot) -> str | None:
+        """Validate camera model matches this profile. Returns error string or None."""
+        model = self.config.get("model")
+        if model and model not in self.ACCEPTED_MODELS:
+            return (
+                f"Model mismatch: camera '{self.cam_name}' has model '{model}' "
+                f"but {self.name} profile only accepts {self.ACCEPTED_MODELS}"
+            )
+        return None
 
     async def run(self, robot) -> dict:
         """Override base to run all collection phases."""
@@ -94,6 +105,11 @@ class RealSenseProfile(BaseProfile):
             "profile_data": {},
             "errors": [],
         }
+
+        model_mismatch = self._check_model(robot)
+        if model_mismatch:
+            result["errors"].append(model_mismatch)
+            return result
 
         try:
             cam = Camera.from_robot(robot, self.cam_name)

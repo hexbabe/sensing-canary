@@ -307,14 +307,14 @@ Read machine config via `get-config`. Match camera components to profiles by mod
 - `viam:camera:realsense` → realsense
 - `viam:orbbec:astra2` → orbbec
 
-Write `/tmp/canary-runtime.json` with machine credentials + all discovered cameras:
+Write `/tmp/canary-runtime.json` with machine credentials + all discovered cameras. **Always include the `model` field** — profiles use it to validate they're running against the correct hardware:
 ```json
 {
   "machines": [{
     "name": "...", "address": "...", "api_key_id": "...", "api_key": "...", "part_id": "...",
     "cameras": [
-      { "name": "realsense-348522073801", "profile": "realsense", "type": "3d" },
-      { "name": "orbbec-astra2", "profile": "orbbec", "type": "3d" }
+      { "name": "realsense-348522073801", "profile": "realsense", "model": "viam:camera:realsense", "type": "3d" },
+      { "name": "orbbec-astra2", "profile": "orbbec", "model": "viam:orbbec:astra2", "type": "3d" }
     ],
     "telegraf_sensor": { "name": "telegraf-sensor" }
   }],

@@ -63,6 +63,7 @@ class OrbbecProfile(BaseProfile):
     """Orbbec Astra2 raw data collection (MVP: get_images + get_point_cloud)."""
 
     name = "orbbec"
+    ACCEPTED_MODELS = {"viam:orbbec:astra2"}
 
     async def run(self, robot) -> dict:
         """Collect all raw data for the Astra2."""
@@ -76,6 +77,14 @@ class OrbbecProfile(BaseProfile):
             "profile_data": {},
             "errors": [],
         }
+
+        # Validate that this camera's model matches what this profile expects.
+        # Prevents silent wrong-profile runs (e.g. realsense camera assigned to
+        # orbbec profile by agent mistake).
+        model_mismatch = self._check_model(robot)
+        if model_mismatch:
+            result["errors"].append(model_mismatch)
+            return result
 
         try:
             cam = Camera.from_robot(robot, self.cam_name)
@@ -97,6 +106,33 @@ class OrbbecProfile(BaseProfile):
         result["profile_data"]["source_filter"] = await self._test_source_filters(cam)
 
         return result
+
+    # ------------------------------------------------------------------
+    # Model validation
+    # ------------------------------------------------------------------
+
+    def _check_model(self, robot) -> str | None:
+        """Check robot resource names for this camera's model.
+
+        Returns an error string if the model doesn't match, None if OK or
+        if the model can't be determined (fail-open to avoid blocking on
+        SDK quirks).
+        """
+        for rn in robot.resource_names:
+            if getattr(rn, "name", None) == self.cam_name:
+                # Build "namespace:type:subtype" model string from resource name
+                # Resource names don't directly carry the model, but we can check
+                # if the camera exists as expected subtype
+                break
+
+        # Check via config if the agent passed a model hint
+        model = self.config.get("model")
+        if model and model not in self.ACCEPTED_MODELS:
+            return (
+                f"Model mismatch: camera '{self.cam_name}' has model '{model}' "
+                f"but {self.name} profile only accepts {self.ACCEPTED_MODELS}"
+            )
+        return None
 
     # ------------------------------------------------------------------
     # Frame metadata
