@@ -18,16 +18,57 @@ canary/
     realsense/
       setup.md                       ← profile setup playbook
       collect.py                     ← profile data collection
+    orbbec/
+      setup.md                       ← profile setup playbook
+      collect.py                     ← profile data collection
   runs/
     YYYY-MM-DD/                      ← one folder per day
       .lock                          ← run lock (prevents overlapping ticks)
       setup.json                     ← setup trace (once per day)
-      webrtc.json                    ← WebRTC samples (once per day)
-      samples/
-        HHMM_full.json               ← first collection (full SDK)
-        HHMM_probe.json              ← lightweight probes (rest of day)
       report.md                      ← analysis report (generated at rollover)
+      machine/                       ← machine-level telemetry
+        HHMM_full_telegraf.json
+        HHMM_full_logs.json
+      <profile>/                     ← one per active profile (realsense, orbbec, etc.)
+        webrtc.json                  ← WebRTC samples for this profile's camera
+        samples/
+          HHMM_full.json             ← full SDK collection (profile cameras only)
+          HHMM_probe.json            ← lightweight probes (profile cameras only)
 ```
+
+## Python Environment
+
+**Always use the skill's own venv for all Python invocations.** Never use system Python.
+
+### Setup (one-time)
+
+```bash
+cd <SKILL_DIR>
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+### Usage
+
+All `python3` commands in this skill must use the venv interpreter:
+
+```bash
+cd <SKILL_DIR>
+.venv/bin/python3 profiles/sdk_test.py --config canary.json ...
+.venv/bin/python3 profiles/config_helper.py --config canary.json ...
+```
+
+If the venv doesn't exist or is missing dependencies, create/update it before proceeding:
+
+```bash
+cd <SKILL_DIR>
+[ -d .venv ] || python3 -m venv .venv
+.venv/bin/pip install -q -r requirements.txt
+```
+
+**Why:** System Python may lack `Pillow` (needed for resolution cross-checks in profiles), have wrong `viam-sdk` version, or conflict with other tools. The venv pins exact versions via `requirements.txt` and keeps canary isolated.
+
+---
 
 ## Configuration
 
@@ -87,11 +128,11 @@ LOCK_FILE = TODAY_DIR/.lock
 ### 1. Check lock
 
 Check if `LOCK_FILE` exists:
-- **Lock exists and age < 90 minutes** → Write `TODAY_DIR/samples/NOW_skipped.json` with `{"reason": "locked", "lock_age_minutes": N}`. Exit.
+- **Lock exists and age < 90 minutes** → Write `TODAY_DIR/machine/NOW_skipped.json` with `{"reason": "locked", "lock_age_minutes": N}`. Exit.
 - **Lock exists and age ≥ 90 minutes** → Stale lock. Delete it, log a warning, proceed.
 - **No lock** → Proceed.
 
-Create `TODAY_DIR` (and `TODAY_DIR/samples/`) if they don't exist. Write `LOCK_FILE` with current timestamp.
+Create `TODAY_DIR` (and `TODAY_DIR/machine/`) if they don't exist. Write `LOCK_FILE` with current timestamp.
 
 ### 2. Determine tick type
 
@@ -104,7 +145,7 @@ Check if `TODAY_DIR/setup.json` exists:
 Find the most recent `runs/YYYY-MM-DD/` folder that is NOT today and HAS `setup.json`.
 
 If found:
-- Read all files from that folder (setup.json, webrtc.json, samples/*.json)
+- Read all files from that folder: `setup.json`, `<profile>/webrtc.json`, `<profile>/samples/*.json`, `machine/*_telegraf.json`, `machine/*_logs.json`
 - Run **Step 9: Analysis** on that data
 - Write `report.md` into that folder
 - Send WhatsApp summary (compact: key metrics + pass/fail per category)
@@ -123,7 +164,7 @@ Preserve persistent resources, clear everything else:
 
 ```bash
 cd <PROFILES_DIR>
-/tmp/venv/bin/python3 config_helper.py --config ../canary.json --machine <MACHINE> \
+<SKILL_DIR>/.venv/bin/python3 config_helper.py --config ../canary.json --machine <MACHINE> \
   clear-resources --preserve <comma-separated persistent_resources>
 ```
 
@@ -156,7 +197,7 @@ After all profiles are set up and config is saved, capture exact versions:
 
 ```bash
 cd <PROFILES_DIR>
-/tmp/venv/bin/python3 config_helper.py --config ../canary.json --machine <MACHINE> get-version
+<SKILL_DIR>/.venv/bin/python3 config_helper.py --config ../canary.json --machine <MACHINE> get-version
 ```
 
 This returns viam-server version/platform/api_version and all module name/module_id/version entries.
@@ -207,18 +248,21 @@ Write `TODAY_DIR/setup.json`. The `versions` field is mandatory — it records t
 
 Browser is already open from setup. Only run if `viam_app.password` is set and not `"REPLACE_ME"`.
 
+**Run WebRTC for each profile's camera sequentially.** For each profile in `test_profiles`:
+
 1. Navigate to machine CONTROL tab
-2. Find the camera stream, switch to **Live** mode (WebRTC)
+2. Find the camera stream for this profile's camera, switch to **Live** mode (WebRTC)
 3. Record `stream_start_ts` via JS: `Date.now()`
 4. Poll `getVideoPlaybackQuality()` at configured interval until first frame → record `ttff_ts`
 5. Continue sampling for configured duration
-6. Write `TODAY_DIR/webrtc.json`:
+6. Write `TODAY_DIR/<profile>/webrtc.json`:
 
 ```json
 {
   "schema": "canary.webrtc.v1",
   "collected_at": "ISO-8601",
   "machine": "name",
+  "profile": "realsense",
   "camera": "name",
   "stream_start_ts": 1709654400000,
   "ttff_ts": 1709654407000,
@@ -238,6 +282,8 @@ Browser is already open from setup. Only run if `viam_app.password` is set and n
 ```
 
 No FPS calculation, no pass/fail. Raw samples only.
+
+**Note:** Each additional profile adds ~5 minutes to WebRTC collection. Budget accordingly.
 
 ### 6.5. Close browser
 
@@ -259,15 +305,16 @@ After closing the browser, run a full SDK collection as the first sample of the 
 
 Read machine config via `get-config`. Match camera components to profiles by model:
 - `viam:camera:realsense` → realsense
-- (future: orbbec, webcam, etc.)
+- `viam:orbbec:astra2` → orbbec
 
-Write `/tmp/canary-runtime.json` with machine credentials + discovered cameras:
+Write `/tmp/canary-runtime.json` with machine credentials + all discovered cameras:
 ```json
 {
   "machines": [{
     "name": "...", "address": "...", "api_key_id": "...", "api_key": "...", "part_id": "...",
     "cameras": [
-      { "name": "realsense-348522073801", "profile": "realsense", "type": "3d" }
+      { "name": "realsense-348522073801", "profile": "realsense", "type": "3d" },
+      { "name": "orbbec-astra2", "profile": "orbbec", "type": "3d" }
     ],
     "telegraf_sensor": { "name": "telegraf-sensor" }
   }],
@@ -279,8 +326,15 @@ Write `/tmp/canary-runtime.json` with machine credentials + discovered cameras:
 
 ```bash
 cd <PROFILES_DIR>
-/tmp/venv/bin/python3 sdk_test.py --config /tmp/canary-runtime.json -o <TODAY_DIR>/samples/<NOW>_full.json
+<SKILL_DIR>/.venv/bin/python3 sdk_test.py --config /tmp/canary-runtime.json --output-dir <TODAY_DIR> --tag <NOW>_full
 ```
+
+This writes profile-scoped output:
+- `<TODAY_DIR>/<profile>/samples/<NOW>_full.json` — per-profile camera data (schema `canary.dump.v2`)
+- `<TODAY_DIR>/machine/<NOW>_full_telegraf.json` — telegraf readings (schema `canary.telegraf.v1`)
+- `<TODAY_DIR>/machine/<NOW>_full_logs.json` — machine logs (schema `canary.logs.v1`)
+
+**Backward compat:** The old `-o` flag still works for combined single-file output (schema `canary.dump.v1`). Use `--output-dir`/`--tag` for all new runs.
 
 #### Release lock and exit
 
@@ -294,15 +348,15 @@ Lightweight — no browser, no setup, no point cloud.
 
 #### 7.1: Build runtime config
 
-Same as step 6.5 — read machine config, build `/tmp/canary-runtime.json`.
+Same as step 6.6 — read machine config, build `/tmp/canary-runtime.json`.
 
-If the machine config has no cameras (setup failed or config was cleared externally), log an error to `samples/NOW_probe.json` and release the lock.
+If the machine config has no cameras (setup failed or config was cleared externally), log an error to `machine/NOW_skipped.json` and release the lock.
 
 #### 7.2: Run probe collector
 
 ```bash
 cd <PROFILES_DIR>
-/tmp/venv/bin/python3 sdk_test.py --config /tmp/canary-runtime.json --probe -o <TODAY_DIR>/samples/<NOW>_probe.json
+<SKILL_DIR>/.venv/bin/python3 sdk_test.py --config /tmp/canary-runtime.json --probe --output-dir <TODAY_DIR> --tag <NOW>_probe
 ```
 
 #### 7.3: Release lock and exit
@@ -317,9 +371,13 @@ Delete `LOCK_FILE`. Probe tick complete.
 
 Read all files from the target run folder (`runs/YYYY-MM-DD/`):
 - `setup.json` — setup trace
-- `webrtc.json` — WebRTC samples
-- `samples/*_full.json` — full SDK collections
-- `samples/*_probe.json` — lightweight probes
+- `<profile>/webrtc.json` — WebRTC samples (one per profile)
+- `<profile>/samples/*_full.json` — full SDK collections (per profile, schema `canary.dump.v2`)
+- `<profile>/samples/*_probe.json` — lightweight probes (per profile, schema `canary.dump.v2`)
+- `machine/*_telegraf.json` — telegraf readings (schema `canary.telegraf.v1`)
+- `machine/*_logs.json` — machine logs (schema `canary.logs.v1`)
+
+**Legacy compat:** If `samples/*_full.json` or `samples/*_probe.json` exist at the run root (v1 layout), read those instead. This handles runs that started before the v2 output migration.
 
 ### Analyze
 
@@ -328,25 +386,29 @@ Read all files from the target run folder (`runs/YYYY-MM-DD/`):
 - Discovery results, setup timing
 - Developer UX observations collated across profiles
 
-**WebRTC (from webrtc.json):**
-- TTFF (ttff_ts - stream_start_ts)
+**WebRTC (from `<profile>/webrtc.json`):**
+- Per-profile TTFF (ttff_ts - stream_start_ts)
 - FPS time series (frame deltas between samples)
 - Dropped frames, resolution consistency
+- Compare TTFF across profiles if multiple exist
 
-**SDK — Trend Analysis (from all samples):**
-- **Latency**: p50/p95/p99 of get_images latency across all probes
-- **FPS stability**: from full collection FPS samples
-- **Failure rate**: % of probes with SDK call errors
+**SDK — Trend Analysis (from `<profile>/samples/`):**
+
+Analyze each profile separately, then compare:
+- **Latency**: p50/p95/p99 of get_images latency across all probes (per profile)
+- **FPS stability**: from full collection FPS samples (per profile)
+- **Failure rate**: % of probes with SDK call errors (per profile)
 - **Frame consistency**: data_bytes variance across probes (sudden drops = concern)
+- **Cross-profile comparison**: latency/reliability differences between realsense and orbbec
 
-**Telegraf — Resource Trends (from all samples):**
+**Telegraf — Resource Trends (from `machine/*_telegraf.json`):**
 - **Memory**: baseline (first sample) vs final, linear regression on RSS. Positive slope = leak candidate. Flag if slope suggests >10% growth per 24h.
 - **CPU**: mean, max, sustained high periods
 - **Temperature**: max, trend direction, thermal throttle risk
 - **Disk**: usage trend
 - **Load**: mean load1 vs n_cpus
 
-**Logs — Noise & Severity (from all samples):**
+**Logs — Noise & Severity (from `machine/*_logs.json`):**
 - Total error/fatal count across the day
 - Top 5 recurring log messages (grouped by message template)
 - Error rate per hour (are errors bursty or steady?)
@@ -369,13 +431,19 @@ Compact format for WhatsApp (no markdown tables, no headers):
 ```
 🐤 Canary Report — YYYY-MM-DD
 
-*Performance*
-get_images p50: XXms  p95: XXms  p99: XXms
-Point cloud: XXms avg (N calls)
+*realsense (D435i)*
+get_images p50: XXms  p95: XXms
+PCD: XXms avg (N calls)
 WebRTC TTFF: XXs
+Probes: XX/XX ok
 
-*Stability*
-Uptime: XX/XX probes succeeded
+*orbbec (Astra2)*
+get_images p50: XXms  p95: XXms
+PCD: XXms avg (N calls)
+WebRTC TTFF: XXs
+Probes: XX/XX ok
+
+*Machine*
 Memory: baseline XXM → final XXM (slope: +X.X MB/hr)
 Errors: XX total (XX unique)
 
