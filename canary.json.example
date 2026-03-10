@@ -6,7 +6,6 @@
       "api_key_id": "REPLACE_ME",
       "api_key": "REPLACE_ME",
       "part_id": "08852a48-cafb-47fc-a747-14982036c715",
-      "machine_id": "b2fd0eaa-89f5-40b1-aff6-7f3ecaa37205",
       "test_profiles": [
         "realsense"
       ],
@@ -19,10 +18,6 @@
       }
     }
   ],
-  "viam_app": {
-    "email": "REPLACE_ME",
-    "password": "REPLACE_ME"
-  },
   "schedule": {
     "cron_expr": "*/30 * * * *",
     "timezone": "America/New_York"

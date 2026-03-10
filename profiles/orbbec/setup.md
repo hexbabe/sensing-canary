@@ -1,19 +1,18 @@
 # Orbbec Astra2 Setup Playbook
 
 ## Rule
-Camera components MUST come from the discovery service's test card. Never manually add an orbbec camera component.
+Camera components MUST come from the discovery service. Never manually add an orbbec camera component.
 
 ## Method
-Browser on app.viam.com for all setup. Avoid using the raw JSON editor tab on the configure page. Use it only if the builder tab is too hard to use for the canary.
-Use `config_helper.py` only for: `clear-resources`, `get-config`, `get-logs`, and as discovery fallback if UI is broken.
+Setup is done entirely via `config_helper.py` CLI. No browser needed for setup.
 
 ## Steps
 
 ### 1. Add the orbbec module
-Navigate to machine config page. Add the `viam:orbbec` module (not a camera component). Set version to "latest-with-prerelease" using the builder UI. Save.
+Use `config_helper.py` to add the `viam:orbbec` module (version: latest-with-prerelease).
 
 ### 2. Add the discovery service
-Add service: model `viam:orbbec:discovery`. Save.
+Add service: model `viam:orbbec:discovery`.
 
 ### 3. Wait for startup
 Wait for module + discovery service to come online. Check logs: `get-logs --num 50 --lookback 2`.
@@ -27,24 +26,20 @@ Wait for module + discovery service to come online. Check logs: `get-logs --num 
 - Look for: `enableGlobalTimestamp` messages, D2C alignment config, device detection logs
 
 ### 4. Discover and add cameras
-Go to CONTROL tab → discovery service test card → trigger/view discovery results → add discovered cameras to config. Save.
+Run discovery via CLI and add discovered cameras:
+```bash
+python3 config_helper.py --config canary.json --machine <MACHINE> discover
+python3 config_helper.py --config canary.json --machine <MACHINE> add-resource-from-discovery-result
+```
 
 **Note:** Orbbec discovery results contain `serial_number` only — there is NO `sensors` attribute (unlike realsense). This is expected behavior.
 
-If discovery UI is broken, fall back to CLI and note it:
-```bash
-python3 config_helper.py --config canary.json --machine <MACHINE> discover --service <name>
-python3 config_helper.py --config canary.json --machine <MACHINE> add-resource-from-discovery-result --json '<result>'
-```
-
 ### 5. Verify cameras running
-Check CONTROL tab for live stream. Then toggle the **point cloud viewer** on the camera's test card and verify the 3D point cloud renders.
+Check via SDK (get_images) or logs that cameras are producing frames.
 
 Check logs: `get-logs --num 50 --lookback 2`.
 
 **Observe:**
-- Does the 2D live stream render correctly?
-- Does the point cloud viewer load and display a 3D scene? Does it look reasonable (not a flat plane, not all zeros, not garbage)?
 - Are there firmware warnings? Are they actionable (do they tell you what to do)?
 - Any errors that look scary but are actually harmless? Note the false alarm.
 - Could you diagnose a real failure from these logs without source code access?
@@ -68,4 +63,4 @@ At every step, evaluate from the perspective of a developer debugging or setting
 - 1 module: `viam:orbbec` (latest-with-prerelease)
 - 1 discovery service: `viam:orbbec:discovery`
 - N cameras from discovery (with `serial_number` in attributes, model `viam:orbbec:astra2`)
-- Live video on CONTROL tab
+- Frames producing via SDK

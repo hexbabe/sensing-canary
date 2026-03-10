@@ -1,0 +1,6 @@
+# Canary skill dependencies
+# Install: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+
+viam-sdk==0.71.0
+Pillow>=10.0.0,<12.0.0
+protobuf>=5.29.0,<6.0.0

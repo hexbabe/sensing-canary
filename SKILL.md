@@ -10,6 +10,11 @@ Act as a QA engineer: set up Viam machines from scratch, exercise camera modules
 canary/
   SKILL.md                          ← you are here
   canary.json                        ← config
+  webrtc-stats/                      ← local WebRTC testing app (Vite + @viamrobotics/sdk)
+    src/main.ts                      ← main entry point
+    index.html                       ← UI shell
+    package.json
+    vite.config.ts                   ← dev server on port 5199
   profiles/
     __init__.py                      ← profile registry
     base.py                          ← base data collector
@@ -74,8 +79,8 @@ cd <SKILL_DIR>
 
 `canary.json` fields:
 
-- **machines[]**: `name`, `address`, `api_key_id`, `api_key`, `part_id`, `machine_id`, `test_profiles[]`, `persistent_resources[]`, `telegraf_sensor`
-- **viam_app**: `email`, `password` (must be email/password, not Google SSO)
+- **machines[]**: `name`, `address`, `api_key_id`, `api_key`, `part_id`, `test_profiles[]`, `persistent_resources[]`, `telegraf_sensor`
+
 - **logs**: `enabled`, `num_entries`, `lookback_minutes`, `levels`
 - **schedule**: `cron_expr`, `timezone`
 - **alerts**: `slack_webhook`, `whatsapp`
@@ -102,7 +107,7 @@ cron(action="add", job={
 
 Instead of independent runs every 30 minutes, the canary accumulates data within a single daily run folder (`runs/YYYY-MM-DD/`):
 
-- **First tick of the day**: Rollover (analyze previous day → WhatsApp report) → full setup (browser) → full SDK collection. Budget ~1 hour for this.
+- **First tick of the day**: Rollover (analyze previous day → WhatsApp report) → full setup (CLI) → WebRTC (browser) → full SDK collection. Budget ~30 minutes for this.
 - **Subsequent ticks**: Lightweight probe only (single get_images per camera + telegraf + logs). Takes ~2 minutes.
 - **Lock file**: Prevents overlapping ticks. If a previous tick is still running, the new tick skips gracefully.
 
@@ -123,7 +128,10 @@ TODAY = YYYY-MM-DD in TIMEZONE
 NOW = HHMM in TIMEZONE
 TODAY_DIR = RUNS_DIR/TODAY
 LOCK_FILE = TODAY_DIR/.lock
+TICK_START = current UTC timestamp (record this immediately — used for log lookback)
 ```
+
+**Log lookback rule:** When collecting logs at any point during the tick, compute `lookback_minutes` as the number of minutes elapsed since `TICK_START` (rounded up, minimum 1). Do NOT use the static `lookback_minutes` from `canary.json` — that value is a default for probe ticks only. First ticks can run 10-30 minutes; using a fixed 30-minute window misses early startup logs.
 
 ### 1. Check lock
 
@@ -168,28 +176,33 @@ cd <PROFILES_DIR>
   clear-resources --preserve <comma-separated persistent_resources>
 ```
 
-#### 4.3: Start browser and log in
+#### 4.3: Profile Setup (CLI — no browser)
 
-1. `browser(action="start", profile="openclaw")`
-2. Navigate to `https://app.viam.com/machine/<machine_id>`
-3. Log in with email/password from `canary.json` viam_app credentials if needed
-4. Use JS evaluate (IIFE pattern) for interactions
-
-### 5. Profile Setup (browser)
+Setup is done entirely via `config_helper.py`. The browser is NOT used for setup — it's too unreliable with the Viam app's dynamic UI. Browser is only used later for WebRTC testing (step 6).
 
 For each profile in `test_profiles`:
 
-1. Read `profiles/<profile>/setup.md`
-2. Follow the steps via the browser on app.viam.com
-3. After each step, capture logs via `config_helper.py get-logs`
-4. After all profile steps, verify with `config_helper.py get-config`
+1. Read `profiles/<profile>/setup.md` for the module/discovery model names
+2. Use `config_helper.py` to add modules, run discovery, and add cameras:
 
-**`config_helper.py` is ONLY used for:**
+```bash
+cd <PROFILES_DIR>
+# Run discovery for each profile
+<SKILL_DIR>/.venv/bin/python3 config_helper.py --config ../canary.json --machine <MACHINE> discover
+# Add discovered resources
+<SKILL_DIR>/.venv/bin/python3 config_helper.py --config ../canary.json --machine <MACHINE> add-resource-from-discovery-result
+```
+
+3. After all profiles, verify with `config_helper.py get-config`
+4. Capture logs via `config_helper.py get-logs`
+
+**`config_helper.py` commands used during setup:**
 - `clear-resources` (step 4.2)
+- `discover` (find cameras)
+- `add-resource-from-discovery-result` (add cameras to config)
 - `get-config` (verification)
 - `get-version` (capture viam-server + module semvers)
 - `get-logs` (raw log capture)
-- `discover` + `add-resource-from-discovery-result` (fallback if discovery UI is broken)
 
 #### 5.1: Capture versions
 
@@ -244,58 +257,93 @@ Write `TODAY_DIR/setup.json`. The `versions` field is mandatory — it records t
 }
 ```
 
-### 6. WebRTC Testing (browser)
+### 6. WebRTC Testing (local app)
 
-Browser is already open from setup. Only run if `viam_app.password` is set and not `"REPLACE_ME"`.
+WebRTC testing uses the local `webrtc-stats` app, which connects directly to the machine via the Viam SDK.
 
-**Run WebRTC for each profile's camera sequentially.** For each profile in `test_profiles`:
+#### 6.1: Start the dev server (if not already running)
 
-1. Navigate to machine CONTROL tab
-2. Find the camera stream for this profile's camera, switch to **Live** mode (WebRTC)
-3. Record `stream_start_ts` via JS: `Date.now()`
-4. Poll `getVideoPlaybackQuality()` at configured interval until first frame → record `ttff_ts`
-5. Continue sampling for configured duration
-6. Write `TODAY_DIR/<profile>/webrtc.json`:
+```bash
+cd <SKILL_DIR>/webrtc-stats
+npm run dev &
+```
+
+The server runs on `http://127.0.0.1:5199/`. Check if it's already running before starting.
+
+#### 6.2: Run WebRTC test via browser
+
+Start a browser and navigate to the local app with the machine's credentials and camera names:
+
+```
+browser(action="start", profile="openclaw")
+browser(action="navigate", targetUrl="http://127.0.0.1:5199/?host=<ADDRESS>&key=<API_KEY>&keyId=<API_KEY_ID>&cameras=<CAM1>,<CAM2>&duration=60&interval=5")
+```
+
+Where `<ADDRESS>`, `<API_KEY>`, `<API_KEY_ID>` come from `canary.json` machines config, and `<CAM1>,<CAM2>` are the camera component names from the machine config (one per profile).
+
+#### 6.3: Wait for results
+
+Poll the page for completion by checking for the `data-complete` attribute on `#json-output`:
+
+```
+browser(action="act", request={kind: "evaluate", fn: "document.querySelector('#json-output')?.getAttribute('data-complete') === 'true'"})
+```
+
+Or read the global result directly:
+
+```
+browser(action="act", request={kind: "evaluate", fn: "JSON.stringify(window.__canaryWebrtcResult)"})
+```
+
+The app runs cameras sequentially (duration seconds each), so total wait = `duration × number_of_cameras`. Default 60s per camera.
+
+#### 6.4: Parse and write results
+
+The app produces a single JSON result with schema `canary.webrtc.v2`:
 
 ```json
 {
-  "schema": "canary.webrtc.v1",
-  "collected_at": "ISO-8601",
-  "machine": "name",
-  "profile": "realsense",
-  "camera": "name",
-  "stream_start_ts": 1709654400000,
-  "ttff_ts": 1709654407000,
-  "sample_interval_ms": 30000,
-  "samples": [
+  "schema": "canary.webrtc.v2",
+  "collectedAt": "ISO-8601",
+  "host": "ADDRESS",
+  "durationS": 60,
+  "intervalS": 5,
+  "cameras": [
     {
-      "ts": 1709654430000,
-      "total_frames": 142,
-      "dropped_frames": 0,
-      "video_width": 1280,
-      "video_height": 720,
-      "current_time": 4.5,
-      "paused": false
+      "name": "realsense-348522073801",
+      "streamStartTs": 1709654400000,
+      "ttffMs": 78,
+      "samples": [
+        {
+          "ts": 1709654405000,
+          "elapsedMs": 5000,
+          "totalFrames": 100,
+          "droppedFrames": 0,
+          "videoWidth": 1280,
+          "videoHeight": 720,
+          "currentTime": 4.5,
+          "fps": 20
+        }
+      ],
+      "finalState": "ok"
     }
   ]
 }
 ```
 
-No FPS calculation, no pass/fail. Raw samples only.
+Split the result by camera name and write per-profile files:
+- Match each camera entry to its profile (by camera name → profile mapping from setup)
+- Write `TODAY_DIR/<profile>/webrtc.json` for each profile
 
-**Note:** Each additional profile adds ~5 minutes to WebRTC collection. Budget accordingly.
-
-### 6.5. Close browser
-
-**MANDATORY.** After WebRTC collection, stop the browser immediately. Do not leave it running.
+#### 6.5: Stop the browser
 
 ```
 browser(action="stop", profile="openclaw")
 ```
 
-Chrome renderer processes leak memory aggressively (~1-2 GB per session). If the browser is not stopped, leftover renderers accumulate across daily runs and will consume all available RAM within days, producing false memory-leak signals in canary reports.
+**MANDATORY** — same as before. Every code path that starts Chrome must stop it.
 
-This step is not optional. If WebRTC fails or is skipped, still stop the browser. If setup fails partway through, still stop the browser. **Any code path that calls `browser(action="start")` MUST eventually call `browser(action="stop")`.**
+**Note:** The dev server (`npm run dev`) can be left running — it's lightweight (~20MB RSS). It will be reused across ticks.
 
 ### 6.6. Full SDK Collection
 
@@ -387,10 +435,11 @@ Read all files from the target run folder (`runs/YYYY-MM-DD/`):
 - Developer UX observations collated across profiles
 
 **WebRTC (from `<profile>/webrtc.json`):**
-- Per-profile TTFF (ttff_ts - stream_start_ts)
-- FPS time series (frame deltas between samples)
+- Per-profile TTFF (`ttffMs` field, already computed)
+- FPS time series (from `fps` field in samples, or compute from frame deltas)
 - Dropped frames, resolution consistency
 - Compare TTFF across profiles if multiple exist
+- Schema v2 (`canary.webrtc.v2`) has `ttffMs` directly; legacy v1 uses `ttff_ts - stream_start_ts`
 
 **SDK — Trend Analysis (from `<profile>/samples/`):**
 
@@ -476,18 +525,18 @@ Errors: XX total (XX unique)
 
 - **config_helper.py errors**: Check API key and part_id
 - **Discovery empty**: Module may not have started — wait, check logs
-- **Browser broken**: Google Chrome (not snap Chromium), `noSandbox: true`
-- **Google SSO blocks login**: Must use email/password
+- **webrtc-stats dev server not running**: `cd <SKILL_DIR>/webrtc-stats && npm run dev &`
+- **WebRTC test shows TTFF timeout**: Check viam-server logs — camera module may not be producing frames
 - **Telegraf missing after clear**: Check `persistent_resources`
 - **Lock stuck**: If `.lock` is older than 90 min, it's stale — delete and proceed
 - **First tick too slow**: Setup + browser + WebRTC can take 30-60 min. Lock prevents overlap.
-- **Memory climbing across probes**: Check `ps aux --sort=-%mem | head -20` — if Chrome renderers are top consumers, the browser wasn't stopped after setup. Kill them with `browser(action="stop")` or `pkill -f "chrome.*openclaw/browser"`. This is a canary bug, not a viam-server leak.
+- **Memory climbing across probes**: Check `ps aux --sort=-%mem | head -20` — if Chrome renderers are top consumers, the browser wasn't stopped after WebRTC testing. Kill them with `browser(action="stop")` or `pkill -f "chrome.*openclaw/browser"`. This is a canary bug, not a viam-server leak.
 
 ## Rules
 
 1. **Never add components/modules outside setup.** Setup is intentional and logged.
-2. **Always run browser steps in a subagent.**
-3. **Setup uses the browser, not the SDK.** `config_helper.py` only for clear/verify/logs/fallback.
+2. **Browser is only for the local webrtc-stats app (`127.0.0.1:5199`).** Never navigate to external sites. Browser calls are fine from cron isolated sessions and subagents — they ARE the isolation layer. Do NOT spawn nested subagents for browser work; if you're already in an isolated/subagent session, use the browser directly.
+3. **Setup uses config_helper CLI, not the browser.** Browser is only for WebRTC testing (step 6). This keeps setup fast and reliable.
 4. **Steps 1-6.5 are collection only.** No interpretation, no pass/fail, no comparisons.
 5. **Developer UX observations during setup.** Error quality, log noise, health visibility, debuggability.
 6. **Self-contained.** All config from `canary.json` and this directory.
@@ -495,6 +544,6 @@ Errors: XX total (XX unique)
 8. **Dumps are source of truth.** Scriptable by humans.
 9. **persistent_resources survive clears.**
 10. **Lock before work, unlock after.** Never leave a lock behind — always clean up, even on error.
-11. **First tick gets a full hour.** Budget for setup + browser + WebRTC + full SDK.
+11. **First tick gets 30 minutes.** Budget for CLI setup + WebRTC (browser) + full SDK.
 12. **Probe ticks are lightweight.** No browser, no point cloud, no source filters.
 13. **ALWAYS stop the browser.** Every code path that starts Chrome must stop it before exiting — including error/failure paths. Chrome renderers leak ~1-2 GB each and accumulate across runs. Failing to stop the browser poisons memory data for all future probes.

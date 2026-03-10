@@ -1,19 +1,18 @@
 # RealSense Setup Playbook
 
 ## Rule
-Camera components MUST come from the discovery service's test card. Never manually add a realsense camera component.
+Camera components MUST come from the discovery service. Never manually add a realsense camera component.
 
 ## Method
-Browser on app.viam.com for all setup. Avoid using the raw JSON editor tab on the configure page. Use it only if the builder tab is too hard to use for the canary.
-Use `config_helper.py` only for: `clear-resources`, `get-config`, `get-logs`, and as discovery fallback if UI is broken.
+Setup is done entirely via `config_helper.py` CLI. No browser needed for setup.
 
 ## Steps
 
 ### 1. Add the realsense module
-Navigate to machine config page. Add the `viam:realsense` module (not a camera component). Set version to "latest-with-prerelease" using the builder UI. Save.
+Use `config_helper.py` to add the `viam:realsense` module (version: latest-with-prerelease).
 
 ### 2. Add the discovery service
-Add service: model `viam:realsense:discovery`. Save.
+Add service: model `viam:realsense:discovery`.
 
 ### 3. Wait for startup
 Wait for module + discovery service to come online. Check logs: `get-logs --num 50 --lookback 2`.
@@ -25,22 +24,18 @@ Wait for module + discovery service to come online. Check logs: `get-logs --num 
 - Are error levels accurate? (e.g. benign issues logged as ERROR = bad signal-to-noise)
 
 ### 4. Discover and add cameras
-Go to CONTROL tab → discovery service test card → trigger/view discovery results → add discovered cameras to config. Save.
-
-If discovery UI is broken, fall back to CLI and note it:
+Run discovery via CLI and add discovered cameras:
 ```bash
-python3 config_helper.py --config canary.json --machine <MACHINE> discover --service <name>
-python3 config_helper.py --config canary.json --machine <MACHINE> add-resource-from-discovery-result --json '<result>'
+python3 config_helper.py --config canary.json --machine <MACHINE> discover
+python3 config_helper.py --config canary.json --machine <MACHINE> add-resource-from-discovery-result
 ```
 
 ### 5. Verify cameras running
-Check CONTROL tab for live stream. Then toggle the **point cloud viewer** on the camera's test card and verify the 3D point cloud renders.
+Check via SDK (get_images) or logs that cameras are producing frames.
 
 Check logs: `get-logs --num 50 --lookback 2`.
 
 **Observe:**
-- Does the 2D live stream render correctly?
-- Does the point cloud viewer load and display a 3D scene? Does it look reasonable (not a flat plane, not all zeros, not garbage)?
 - Are there firmware warnings? Are they actionable (do they tell you what to do)?
 - Any errors that look scary but are actually harmless? Note the false alarm.
 - Could you diagnose a real failure from these logs without source code access?
@@ -64,4 +59,4 @@ At every step, evaluate from the perspective of a developer debugging or setting
 - 1 module: `viam:realsense` (latest-with-prerelease)
 - 1 discovery service
 - N cameras from discovery (with `serial_number` in attributes)
-- Live video on CONTROL tab
+- Frames producing via SDK
