@@ -86,7 +86,8 @@ async def collect_logs(machine_config, logs_config) -> dict:
         "part_id": machine_config.get("part_id"),
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "config": {
-            "num_entries": logs_config.get("num_entries", 100),
+            # num_entries=0 means fetch all logs (SDK default is 100, but 0 = unlimited)
+            "num_entries": 0,
             "lookback_minutes": logs_config.get("lookback_minutes", 30),
             "levels": logs_config.get("levels", []),
         },

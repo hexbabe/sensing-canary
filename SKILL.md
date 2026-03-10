@@ -81,7 +81,7 @@ cd <SKILL_DIR>
 
 - **machines[]**: `name`, `address`, `api_key_id`, `api_key`, `part_id`, `test_profiles[]`, `persistent_resources[]`, `telegraf_sensor`
 
-- **logs**: `enabled`, `num_entries`, `lookback_minutes`, `levels`
+- **logs**: `enabled`, `lookback_minutes`, `levels`
 - **schedule**: `cron_expr`, `timezone`
 - **alerts**: `slack_webhook`, `whatsapp`
 - **runs_dir**: output directory (default: `runs`)
@@ -367,7 +367,7 @@ Write `/tmp/canary-runtime.json` with machine credentials + all discovered camer
     ],
     "telegraf_sensor": { "name": "telegraf-sensor" }
   }],
-  "logs": { "enabled": true, "num_entries": 100, "lookback_minutes": 30, "levels": [] }
+  "logs": { "enabled": true, "lookback_minutes": 30, "levels": [] }
 }
 ```
 
@@ -389,7 +389,7 @@ This writes profile-scoped output:
     "machine": "name",
     "part_id": "...",
     "timestamp": "ISO-8601",
-    "config": { "num_entries": 100, "lookback_minutes": 30, "levels": [] },
+    "config": { "num_entries": 0, "lookback_minutes": 30, "levels": [] },
     "fetch_error": null,
     "entries": [ { "time": "ISO-8601", "level": "info", "logger": "rdk", "message": "...", "caller": {}, "stack": null } ]
   }
