@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server": "node canary-server.js"
   },
   "dependencies": {
-    "@viamrobotics/sdk": "^0.40.0"
+    "@viamrobotics/sdk": "^0.40.0",
+    "puppeteer": "^22.0.0"
   },
   "devDependencies": {
     "vite": "^6.0.0",

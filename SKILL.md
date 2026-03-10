@@ -259,47 +259,54 @@ Write `TODAY_DIR/setup.json`. The `versions` field is mandatory — it records t
 
 ### 6. WebRTC Testing (local app)
 
-WebRTC testing uses the local `webrtc-stats` app, which connects directly to the machine via the Viam SDK.
+WebRTC testing uses the local `webrtc-stats` app driven by a headless-Puppeteer HTTP server (`canary-server.js`). **No OpenClaw browser tool is needed** — the agent uses plain `curl`.
 
-#### 6.1: Start the dev server (if not already running)
+#### One-time setup (first ever run on the machine)
+
+Install dependencies (includes Puppeteer + its bundled Chromium, ~200 MB one-time download):
 
 ```bash
 cd <SKILL_DIR>/webrtc-stats
-npm run dev &
+npm install
 ```
 
-The server runs on `http://127.0.0.1:5199/`. Check if it's already running before starting.
+#### 6.1: Ensure the canary server is running
 
-#### 6.2: Run WebRTC test via browser
+The canary server (`http://127.0.0.1:5200`) manages the Vite dev server and Puppeteer lifecycle. It persists across ticks and is reused automatically.
 
-Start a browser and navigate to the local app with the machine's credentials and camera names:
-
-```
-browser(action="start", profile="openclaw")
-browser(action="navigate", targetUrl="http://127.0.0.1:5199/?host=<ADDRESS>&key=<API_KEY>&keyId=<API_KEY_ID>&cameras=<CAM1>,<CAM2>&duration=60&interval=5")
+```bash
+# Check if already up
+curl -sf http://127.0.0.1:5200/health && echo "running" || echo "not running"
 ```
 
-Where `<ADDRESS>`, `<API_KEY>`, `<API_KEY_ID>` come from `canary.json` machines config, and `<CAM1>,<CAM2>` are the camera component names from the machine config (one per profile).
+If not running, start it in the background:
 
-#### 6.3: Wait for results
-
-Poll the page for completion by checking for the `data-complete` attribute on `#json-output`:
-
-```
-browser(action="act", request={kind: "evaluate", fn: "document.querySelector('#json-output')?.getAttribute('data-complete') === 'true'"})
-```
-
-Or read the global result directly:
-
-```
-browser(action="act", request={kind: "evaluate", fn: "JSON.stringify(window.__canaryWebrtcResult)"})
+```bash
+cd <SKILL_DIR>/webrtc-stats
+node canary-server.js &
+sleep 2
+curl -sf http://127.0.0.1:5200/health
 ```
 
-The app runs cameras sequentially (duration seconds each), so total wait = `duration × number_of_cameras`. Default 60s per camera.
+The canary server automatically starts the Vite dev server on `127.0.0.1:5199` if it isn't already running.
 
-#### 6.4: Parse and write results
+#### 6.2: Run the WebRTC test via curl
 
-The app produces a single JSON result with schema `canary.webrtc.v2`:
+```bash
+curl -sf "http://127.0.0.1:5200/run?host=<ADDRESS>&key=<API_KEY>&keyId=<API_KEY_ID>&cameras=<CAM1>,<CAM2>&duration=60&interval=5" \
+  -o /tmp/canary-webrtc-raw.json
+```
+
+Where `<ADDRESS>`, `<API_KEY>`, `<API_KEY_ID>` come from `canary.json`, and `<CAM1>,<CAM2>` are the camera component names from the machine config (one per profile).
+
+This call **blocks** until the test finishes (duration × cameras + 90 s buffer). The server returns:
+- **HTTP 200** — test JSON (schema `canary.webrtc.v2`)
+- **HTTP 409** — a prior tick's test is still running; skip WebRTC for this tick and log a note
+- **HTTP 500** — test error; check `{"error":"..."}` field
+
+#### 6.3: Parse and write results
+
+Read `/tmp/canary-webrtc-raw.json`. It contains a single JSON object matching schema `canary.webrtc.v2`:
 
 ```json
 {
@@ -335,15 +342,9 @@ Split the result by camera name and write per-profile files:
 - Match each camera entry to its profile (by camera name → profile mapping from setup)
 - Write `TODAY_DIR/<profile>/webrtc.json` for each profile
 
-#### 6.5: Stop the browser
+**No browser cleanup needed** — the canary server closes headless Chrome internally after each test.
 
-```
-browser(action="stop", profile="openclaw")
-```
-
-**MANDATORY** — same as before. Every code path that starts Chrome must stop it.
-
-**Note:** The dev server (`npm run dev`) can be left running — it's lightweight (~20MB RSS). It will be reused across ticks.
+**Note:** Both the canary server and the Vite dev server can be left running between ticks. They are lightweight and will be reused automatically.
 
 ### 6.6. Full SDK Collection
 
@@ -386,7 +387,7 @@ This writes profile-scoped output:
 
 #### Release lock and exit
 
-Delete `LOCK_FILE`. Verify the browser is not running (it should already be stopped from step 6.5, but double-check). First tick complete.
+Delete `LOCK_FILE`. First tick complete.
 
 ---
 
@@ -530,13 +531,13 @@ Errors: XX total (XX unique)
 - **Telegraf missing after clear**: Check `persistent_resources`
 - **Lock stuck**: If `.lock` is older than 90 min, it's stale — delete and proceed
 - **First tick too slow**: Setup + browser + WebRTC can take 30-60 min. Lock prevents overlap.
-- **Memory climbing across probes**: Check `ps aux --sort=-%mem | head -20` — if Chrome renderers are top consumers, the browser wasn't stopped after WebRTC testing. Kill them with `browser(action="stop")` or `pkill -f "chrome.*openclaw/browser"`. This is a canary bug, not a viam-server leak.
+- **Memory climbing across probes**: Check `ps aux --sort=-%mem | head -20` — if Chromium renderers are top consumers, the canary server may have leaked a headless Chrome process. Kill them with `pkill -f "chrome"`. The canary server closes Puppeteer after each test, but a crash may leave orphaned processes.
 
 ## Rules
 
 1. **Never add components/modules outside setup.** Setup is intentional and logged.
-2. **Browser is only for the local webrtc-stats app (`127.0.0.1:5199`).** Never navigate to external sites. Browser calls are fine from cron isolated sessions and subagents — they ARE the isolation layer. Do NOT spawn nested subagents for browser work; if you're already in an isolated/subagent session, use the browser directly.
-3. **Setup uses config_helper CLI, not the browser.** Browser is only for WebRTC testing (step 6). This keeps setup fast and reliable.
+2. **WebRTC testing uses the canary server (curl), not the OpenClaw browser tool.** The canary server at `127.0.0.1:5200` drives headless Puppeteer internally. Never use `browser(action=...)` for this skill.
+3. **Setup uses config_helper CLI only.** No browser involved in setup — only `curl` for WebRTC testing (step 6). This keeps setup fast and reliable.
 4. **Steps 1-6.5 are collection only.** No interpretation, no pass/fail, no comparisons.
 5. **Developer UX observations during setup.** Error quality, log noise, health visibility, debuggability.
 6. **Self-contained.** All config from `canary.json` and this directory.
@@ -544,6 +545,6 @@ Errors: XX total (XX unique)
 8. **Dumps are source of truth.** Scriptable by humans.
 9. **persistent_resources survive clears.**
 10. **Lock before work, unlock after.** Never leave a lock behind — always clean up, even on error.
-11. **First tick gets 30 minutes.** Budget for CLI setup + WebRTC (browser) + full SDK.
-12. **Probe ticks are lightweight.** No browser, no point cloud, no source filters.
-13. **ALWAYS stop the browser.** Every code path that starts Chrome must stop it before exiting — including error/failure paths. Chrome renderers leak ~1-2 GB each and accumulate across runs. Failing to stop the browser poisons memory data for all future probes.
+11. **First tick gets 30 minutes.** Budget for CLI setup + WebRTC (curl/Puppeteer) + full SDK.
+12. **Probe ticks are lightweight.** No WebRTC, no point cloud, no source filters.
+13. **No manual browser management needed.** The canary server handles Puppeteer lifecycle. If headless Chrome processes accumulate unexpectedly, `pkill -f chrome` is the cleanup.
