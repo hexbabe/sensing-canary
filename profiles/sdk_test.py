@@ -59,7 +59,7 @@ def get_profile(camera_config):
     return profile_cls(camera_config)
 
 
-def _ensure_utc_iso(dt) -> str | None:
+def _ensure_utc_iso(dt) -> "Optional[str]":
     """Convert a datetime to a UTC ISO-8601 string with timezone suffix."""
     if dt is None:
         return None
@@ -315,7 +315,11 @@ def write_profile_scoped_output(dump, output_dir, tag):
                 "schema": "canary.logs.v1",
                 "collected_at": collected_at,
                 "machine": machine_dump["machine"],
-                "logs": logs,
+                "part_id": logs.get("part_id"),
+                "timestamp": logs.get("timestamp"),
+                "config": logs.get("config"),
+                "fetch_error": logs.get("fetch_error"),
+                "entries": logs.get("entries", []),
             }
             logs_path = output_dir / "machine" / f"{tag}_logs.json"
             logs_path.parent.mkdir(parents=True, exist_ok=True)

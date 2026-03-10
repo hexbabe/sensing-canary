@@ -381,7 +381,20 @@ cd <PROFILES_DIR>
 This writes profile-scoped output:
 - `<TODAY_DIR>/<profile>/samples/<NOW>_full.json` — per-profile camera data (schema `canary.dump.v2`)
 - `<TODAY_DIR>/machine/<NOW>_full_telegraf.json` — telegraf readings (schema `canary.telegraf.v1`)
-- `<TODAY_DIR>/machine/<NOW>_full_logs.json` — machine logs (schema `canary.logs.v1`)
+- `<TODAY_DIR>/machine/<NOW>_full_logs.json` — machine logs (schema `canary.logs.v1`):
+  ```json
+  {
+    "schema": "canary.logs.v1",
+    "collected_at": "ISO-8601",
+    "machine": "name",
+    "part_id": "...",
+    "timestamp": "ISO-8601",
+    "config": { "num_entries": 100, "lookback_minutes": 30, "levels": [] },
+    "fetch_error": null,
+    "entries": [ { "time": "ISO-8601", "level": "info", "logger": "rdk", "message": "...", "caller": {}, "stack": null } ]
+  }
+  ```
+  Note: `entries` is a **top-level key** — read as `data["entries"]`, not `data["logs"]["entries"]`.
 
 **Backward compat:** The old `-o` flag still works for combined single-file output (schema `canary.dump.v1`). Use `--output-dir`/`--tag` for all new runs.
 
@@ -459,6 +472,7 @@ Analyze each profile separately, then compare:
 - **Load**: mean load1 vs n_cpus
 
 **Logs — Noise & Severity (from `machine/*_logs.json`):**
+Read entries as `data["entries"]` (top-level key per `canary.logs.v1` schema).
 - Total error/fatal count across the day
 - Top 5 recurring log messages (grouped by message template)
 - Error rate per hour (are errors bursty or steady?)
