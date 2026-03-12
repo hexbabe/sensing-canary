@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import io
 import time
+from typing import Optional
 from datetime import datetime, timezone
 
 from PIL import Image
@@ -111,7 +112,7 @@ class OrbbecProfile(BaseProfile):
     # Model validation
     # ------------------------------------------------------------------
 
-    def _check_model(self, robot) -> str | None:
+    def _check_model(self, robot) -> Optional[str]:
         """Check robot resource names for this camera's model.
 
         Returns an error string if the model doesn't match, None if OK or

@@ -400,7 +400,14 @@ This writes profile-scoped output:
 
 #### Release lock and exit
 
-Delete `LOCK_FILE`. First tick complete.
+Bundle the lock delete into the same exec as the sdk_test.py call:
+
+```bash
+<SKILL_DIR>/.venv/bin/python3 sdk_test.py --config /tmp/canary-runtime.json --output-dir <TODAY_DIR> --tag <NOW>_full \
+  && rm -f "$LOCK_FILE"
+```
+
+This ensures the lock is released atomically with the collection completing, even if the LLM session is aborted after the exec returns.
 
 ---
 
@@ -418,12 +425,13 @@ If the machine config has no cameras (setup failed or config was cleared externa
 
 ```bash
 cd <PROFILES_DIR>
-<SKILL_DIR>/.venv/bin/python3 sdk_test.py --config /tmp/canary-runtime.json --probe --output-dir <TODAY_DIR> --tag <NOW>_probe
+<SKILL_DIR>/.venv/bin/python3 sdk_test.py --config /tmp/canary-runtime.json --probe --output-dir <TODAY_DIR> --tag <NOW>_probe \
+  && rm -f "$LOCK_FILE"
 ```
 
-#### 7.3: Release lock and exit
+#### 7.3: Exit
 
-Delete `LOCK_FILE`. Probe tick complete.
+Probe tick complete. Lock was released in the exec above.
 
 ---
 

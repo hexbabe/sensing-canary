@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import io
 import time
+from typing import Optional
 from datetime import datetime, timezone
 
 from google.protobuf.json_format import MessageToDict
@@ -83,7 +84,7 @@ class RealSenseProfile(BaseProfile):
     name = "realsense"
     ACCEPTED_MODELS = {"viam:camera:realsense"}
 
-    def _check_model(self, robot) -> str | None:
+    def _check_model(self, robot) -> Optional[str]:
         """Validate camera model matches this profile. Returns error string or None."""
         model = self.config.get("model")
         if model and model not in self.ACCEPTED_MODELS:
